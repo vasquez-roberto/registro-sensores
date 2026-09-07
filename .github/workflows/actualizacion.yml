@@ -6,7 +6,7 @@ on:
   workflow_dispatch:        # Permite ejecutarlo manualmente desde la pestaña Actions
 
 permissions:
-  contents: write           # Otorga permisos de escritura al bot para hacer git push
+  contents: write           # Permisos necesarios para escribir en el repositorio
 
 jobs:
   build:
@@ -15,6 +15,8 @@ jobs:
     steps:
       - name: Clonar repositorio
         uses: actions/checkout@v3
+        with:
+          fetch-depth: 0    # Descarga todo el historial de git para evitar conflictos
 
       - name: Configurar Python
         uses: actions/setup-python@v4
@@ -38,5 +40,6 @@ jobs:
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add .
           git commit -m "Auto-actualización de archivos GeoJSON" || exit 0
-          git pull --rebase origin main
-          git push
+          git fetch origin main
+          git rebase origin/main
+          git push origin main
