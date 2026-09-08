@@ -1,14 +1,17 @@
 FROM python:3.10-slim
 
-# Directorio de trabajo en el contenedor
+# Instalar dependencias C++ del sistema para geopandas y gdal
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    gdal-bin \
+    libgdal-dev \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
-# Copiar archivos de dependencias e instalarlas
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copiar el código fuente
 COPY . .
 
-# Comando por defecto al ejecutar el contenedor
 CMD ["python", "script.py"]

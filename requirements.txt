@@ -1,4 +1,8 @@
 requests
 pandas
-geopandas
+numpy
+scipy
 shapely
+pyshp
+geojson
+geopandas
