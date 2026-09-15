@@ -9,6 +9,8 @@ from scipy.spatial import Delaunay
 import shapefile
 from shapely.geometry import Point, shape
 
+print("INICIANDO SCRIPT...")
+
 API_KEY = os.getenv(
     "API_KEY_PURPLEAIR", "C7B070E7-AAFE-11F1-9E30-4201AC1DC129"
 )
@@ -16,7 +18,7 @@ CSV_FILE = "sensores_detectados.csv"
 SALIDA_GEOJSON_SENSORES = "sensores.geojson"
 SALIDA_GEOJSON_COLONIAS_PM25 = "AQ_PM25.geojson"
 SALIDA_GEOJSON_COLONIAS_PM10 = "AQ_PM10.geojson"
-ARCHIVO_SHP_COLONIAS = "shp/2023_1_19_A.shp"
+ARCHIVO_SHP_COLONIAS = "shp/2025_1_19_A.shp"
 CAMPOS = "pm1.0,pm2.5"
 
 
@@ -83,6 +85,7 @@ def crear_geojson(df, timestamp):
     datos_historicos = []
 
     for _, fila in df.iterrows():
+        print(f"Consultando sensor {fila['sensor_index']}...")
         pm10, pm25 = consultar_sensor(fila["sensor_index"])
         if pm10 is not None and pm25 is not None:
             props = {
@@ -137,7 +140,7 @@ def cargar_datos_colonias_shp(archivo_shp):
         colonias.append({"nombre": nombre_colonia, "geometry": geometry})
     return colonias
 
-
+# Interpolación baricéntrica
 def interpolar_lineal(punto, triangulo_indices, puntos, valores):
     v0, v1, v2 = puntos[triangulo_indices]
     z0, z1, z2 = valores[triangulo_indices]
@@ -159,7 +162,7 @@ def generar_geojson_colonias(
     timestamp,
 ):
     try:
-        tri = Delaunay(puntos_data)
+        tri = Delaunay(puntos_data) # Creación de la malla triangulada
     except Exception as e:
         print(f"Error Delaunay: {e}")
         tri = None
@@ -178,9 +181,10 @@ def generar_geojson_colonias(
             if tri is None:
                 colonia["valor_interpolado"] = np.nan
                 continue
-            centroide = geom.centroid
+            centroide = geom.centroid # Obtiene las coordenadas del centroide de la colonia
             p_cent = np.array([centroide.x, centroide.y])
-            idx = tri.find_simplex(p_cent)
+            idx = tri.find_simplex(p_cent) # Busca en cuál triángulo de Delaunay cae el centroide
+            # Ejecuta la interpolación baricéntrica pasándole los vértices del triángulo encontrado
             colonia["valor_interpolado"] = (
                 interpolar_lineal(p_cent, tri.simplices[idx], puntos_data, valores_puntos)
                 if idx != -1

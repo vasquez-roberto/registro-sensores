@@ -1,8 +1,8 @@
-requests
-pandas
-numpy
-scipy
-shapely
-pyshp
 geojson
+numpy
+pandas
+requests
+scipy
+pyshp
+shapely
 geopandas
