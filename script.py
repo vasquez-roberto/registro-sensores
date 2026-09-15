@@ -25,7 +25,14 @@ CAMPOS = "pm1.0,pm2.5"
 def leer_csv(ruta):
     df = pd.read_csv(ruta)
     df = df.dropna(subset=["latitude", "longitude", "sensor_index"])
-    df["sensor_index"] = df["sensor_index"].astype(int)
+    
+    # Limpieza del sensor_index y exclusión de identificadores fuera de rango
+    df["sensor_index"] = pd.to_numeric(df["sensor_index"], errors="coerce").fillna(0).astype(int)
+    
+    # Filtro para excluir el sensor 121825
+    SENSORES_EXCLUIDOS = [121825]
+    df = df[~df["sensor_index"].isin(SENSORES_EXCLUIDOS)]
+    
     return df
 
 
