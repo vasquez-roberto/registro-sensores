@@ -11,6 +11,7 @@ from shapely.geometry import Point, mapping, shape
 
 print("INICIANDO SCRIPT...")
 
+# --- CONFIGURACIÓN Y CONSTANTES ---
 API_KEY = os.getenv(
     "API_KEY_PURPLEAIR", "C7B070E7-AAFE-11F1-9E30-4201AC1DC129"
 )
@@ -19,6 +20,9 @@ SALIDA_GEOJSON_SENSORES = "sensores.geojson"
 SALIDA_GEOJSON_COLONIAS_PM25 = "AQ_PM25.geojson"
 SALIDA_GEOJSON_COLONIAS_PM10 = "AQ_PM10.geojson"
 ARCHIVO_SHP_COLONIAS = "shp/2025_1_19_A.shp"
+
+# LISTA NEGRA: Agrega aquí los IDs (sensor_index) que desees bloquear
+SENSORES_BLOQUEADOS = [121825]  # <--- REEMPLAZA CON LOS IDS REALES
 
 # RANGOS DE VALIDEZ PARA CALIDAD DEL AIRE (µg/m³)
 MIN_VALOR_PM = 0.1
@@ -30,10 +34,23 @@ def leer_csv(ruta):
     df = pd.read_csv(ruta)
     df = df.dropna(subset=["latitude", "longitude", "sensor_index"])
     df["sensor_index"] = df["sensor_index"].astype(int)
+
+    # --- FILTRO DE BLOQUEO DE SENSORES ---
+    sensores_iniciales = len(df)
+    df = df[~df["sensor_index"].isin(SENSORES_BLOQUEADOS)]
+    sensores_excluidos = sensores_iniciales - len(df)
+
+    if sensores_excluidos > 0:
+        print(f"🚫 {sensores_excluidos} sensor(es) fueron bloqueados y excluidos del proceso.")
+    # -------------------------------------
+
     return df
 
 
 def consultar_sensores_masivo(sensor_indices):
+    if not sensor_indices:
+        return {}
+
     ids = ",".join(map(str, sensor_indices))
     url = f"https://api.purpleair.com/v1/sensors?fields=pm1.0_atm,pm2.5_atm&show_only={ids}"
     headers = {"X-API-Key": API_KEY} if API_KEY else {}
