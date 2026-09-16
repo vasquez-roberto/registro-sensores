@@ -21,7 +21,6 @@ SALIDA_GEOJSON_COLONIAS_PM10 = "AQ_PM10.geojson"
 ARCHIVO_SHP_COLONIAS = "shp/2025_1_19_A.shp"
 CAMPOS = "pm1.0,pm2.5"
 
-
 def leer_csv(ruta):
     df = pd.read_csv(ruta)
     df = df.dropna(subset=["latitude", "longitude", "sensor_index"])
