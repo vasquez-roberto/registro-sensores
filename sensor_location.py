@@ -1,7 +1,27 @@
 import csv
+import os
+from pathlib import Path
+
 import requests
 
-API_KEY = "C7B070E7-AAFE-11F1-9E30-4201AC1DC129"
+
+def cargar_env(ruta_env):
+    if not ruta_env.exists():
+        return
+
+    for linea in ruta_env.read_text(encoding="utf-8-sig").splitlines():
+        linea = linea.strip()
+
+        if not linea or linea.startswith("#") or "=" not in linea:
+            continue
+
+        clave, valor = linea.split("=", 1)
+        os.environ.setdefault(clave.strip(), valor.strip().strip('"').strip("'"))
+
+
+cargar_env(Path(__file__).resolve().with_name(".env"))
+
+API_KEY = os.getenv("API_KEY_PURPLEAIR")
 OUTPUT_CSV = "sensores_detectados.csv"
 SENSORES_BLOQUEADOS = {121825}
 
@@ -18,7 +38,11 @@ url = "https://api.purpleair.com/v1/sensors"
 
 
 def obtener_sensores():
-    response = requests.get(url, headers=headers, params=params)
+    if not API_KEY:
+        print("Error: falta API_KEY_PURPLEAIR en el archivo .env.")
+        return []
+
+    response = requests.get(url, headers=headers, params=params, timeout=30)
 
     if response.status_code != 200:
         print(
@@ -32,10 +56,13 @@ def obtener_sensores():
     datos = resultado["data"]
 
     sensores = []
+
     for fila in datos:
         sensor = dict(zip(campos, fila))
+        sensor_id = int(sensor["sensor_index"])
 
-        if int(sensor["sensor_index"]) in SENSORES_BLOQUEADOS:
+        if sensor_id in SENSORES_BLOQUEADOS:
+            print(f"Sensor bloqueado omitido: {sensor_id}")
             continue
 
         sensores.append(sensor)
@@ -48,8 +75,8 @@ def guardar_csv(sensores):
         print("No se encontraron sensores.")
         return
 
-    with open(OUTPUT_CSV, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=sensores[0].keys())
+    with open(OUTPUT_CSV, "w", newline="", encoding="utf-8") as archivo:
+        writer = csv.DictWriter(archivo, fieldnames=sensores[0].keys())
         writer.writeheader()
         writer.writerows(sensores)
 
