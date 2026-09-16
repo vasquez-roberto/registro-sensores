@@ -9,8 +9,6 @@ from scipy.spatial import Delaunay
 import shapefile
 from shapely.geometry import Point, shape
 
-print("INICIANDO SCRIPT...")
-
 API_KEY = os.getenv(
     "API_KEY_PURPLEAIR", "C7B070E7-AAFE-11F1-9E30-4201AC1DC129"
 )
@@ -21,16 +19,17 @@ SALIDA_GEOJSON_COLONIAS_PM10 = "AQ_PM10.geojson"
 ARCHIVO_SHP_COLONIAS = "shp/2025_1_19_A.shp"
 CAMPOS = "pm1.0,pm2.5"
 
+# Agrega aquí los IDs de los sensores que deseas ignorar
+SENSORES_BLOQUEADOS = {121825}  # Reemplaza 12345 por el ID del sensor a bloquear
+
+
 def leer_csv(ruta):
     df = pd.read_csv(ruta)
     df = df.dropna(subset=["latitude", "longitude", "sensor_index"])
+    df["sensor_index"] = df["sensor_index"].astype(int)
     
-    # Limpieza del sensor_index
-    df["sensor_index"] = pd.to_numeric(df["sensor_index"], errors="coerce").fillna(0).astype(int)
-    
-    # Exclusión explícita del sensor no deseado
-    SENSORES_EXCLUIDOS = [121825]
-    df = df[~df["sensor_index"].isin(SENSORES_EXCLUIDOS)]
+    # Filtrar sensores bloqueados desde la lectura
+    df = df[~df["sensor_index"].isin(SENSORES_BLOQUEADOS)]
     
     return df
 
@@ -91,11 +90,16 @@ def crear_geojson(df, timestamp):
     datos_historicos = []
 
     for _, fila in df.iterrows():
-        print(f"Consultando sensor {fila['sensor_index']}...")
-        pm10, pm25 = consultar_sensor(fila["sensor_index"])
+        sensor_idx = int(fila["sensor_index"])
+        
+        # Verificación de respaldo por si el DataFrame no fue filtrado antes
+        if sensor_idx in SENSORES_BLOQUEADOS:
+            continue
+
+        pm10, pm25 = consultar_sensor(sensor_idx)
         if pm10 is not None and pm25 is not None:
             props = {
-                "sensor_index": int(fila["sensor_index"]),
+                "sensor_index": sensor_idx,
                 "name": fila.get("name", ""),
                 "pm1_0": pm10,
                 "pm2_5": pm25,
@@ -112,7 +116,7 @@ def crear_geojson(df, timestamp):
             valores_pm10.append(float(pm10))
 
             datos_historicos.append({
-                "sensor_index": int(fila["sensor_index"]),
+                "sensor_index": sensor_idx,
                 "name": fila.get("name", ""),
                 "timestamp": timestamp,
                 "pm1_0": pm10,
@@ -280,6 +284,11 @@ if __name__ == "__main__":
 
         if os.path.exists("historico.csv") and os.path.exists(CSV_FILE):
             df_hist, df_det = pd.read_csv("historico.csv"), pd.read_csv(CSV_FILE)
+            
+            # También filtramos de df_det cualquier sensor bloqueado para el histórico combinado
+            if "sensor_index" in df_det.columns:
+                df_det = df_det[~df_det["sensor_index"].isin(SENSORES_BLOQUEADOS)]
+
             if "latitude" in df_det.columns and "longitude" in df_det.columns:
                 df_comb = df_hist.merge(
                     df_det[["name", "latitude", "longitude"]],
