@@ -31,22 +31,23 @@ SALIDA_GEOJSON_SENSORES = "sensores.geojson"
 SALIDA_GEOJSON_COLONIAS_PM25 = "AQ_PM25.geojson"
 SALIDA_GEOJSON_COLONIAS_PM10 = "AQ_PM10.geojson"
 ARCHIVO_SHP_COLONIAS = "shp/2025_1_19_A.shp"
-CAMPOS = "pm1.0,pm2.5"
+CAMPOS = "pm10.0,pm2.5"
 
-# Este sensor queda excluido del CSV, las consultas y toda interpolacion.
-SENSORES_BLOQUEADOS = {121825}
+# Límites de cribado basados en el extremo superior de las tablas AQI de EPA.
+# No son límites físicos: un evento extraordinario debe revisarse manualmente.
+MIN_PM = 0.0
+MAX_PM25 = 500.4
+MAX_PM10 = 604.0
 
 
 def leer_csv(ruta):
     df = pd.read_csv(ruta)
     df = df.dropna(subset=["latitude", "longitude", "sensor_index"])
     df["sensor_index"] = df["sensor_index"].astype(int)
-    return df[~df["sensor_index"].isin(SENSORES_BLOQUEADOS)].copy()
+    return df
 
 
 def consultar_sensor(sensor_index):
-    if int(sensor_index) in SENSORES_BLOQUEADOS:
-        return None, None
     if not API_KEY:
         raise RuntimeError("Falta API_KEY_PURPLEAIR en .env")
 
@@ -55,7 +56,7 @@ def consultar_sensor(sensor_index):
         respuesta = requests.get(url, headers={"X-API-Key": API_KEY}, timeout=15)
         respuesta.raise_for_status()
         sensor = respuesta.json().get("sensor", {})
-        return sensor.get("pm1.0"), sensor.get("pm2.5")
+        return sensor.get("pm10.0"), sensor.get("pm2.5")
     except requests.RequestException as error:
         print(f"No se pudo consultar {sensor_index}: {error}")
         return None, None
@@ -89,6 +90,28 @@ def clasificar_calidad_aire_pm10(valor):
     return "Extremadamente mala"
 
 
+def lecturas_validas(sensor_id, pm10, pm25):
+    """Descarta faltantes, valores no numéricos y valores fuera del cribado."""
+    try:
+        pm10, pm25 = float(pm10), float(pm25)
+    except (TypeError, ValueError):
+        print(f"Sensor {sensor_id} descartado: lectura no numérica.")
+        return None
+
+    if not np.isfinite(pm10) or not np.isfinite(pm25):
+        print(f"Sensor {sensor_id} descartado: lectura no finita.")
+        return None
+
+    if not (MIN_PM <= pm10 <= MAX_PM10 and MIN_PM <= pm25 <= MAX_PM25):
+        print(
+            f"Sensor {sensor_id} descartado por valor fuera de rango: "
+            f"PM10={pm10}, PM2.5={pm25}"
+        )
+        return None
+
+    return pm10, pm25
+
+
 def crear_geojson(df, timestamp):
     features, puntos, valores_pm25, valores_pm10, historico = [], [], [], [], []
 
@@ -98,10 +121,10 @@ def crear_geojson(df, timestamp):
         if pm10 is None or pm25 is None:
             continue
 
-        try:
-            pm10, pm25 = float(pm10), float(pm25)
-        except (TypeError, ValueError):
+        valores = lecturas_validas(sensor_id, pm10, pm25)
+        if valores is None:
             continue
+        pm10, pm25 = valores
 
         coordenadas = [float(fila["longitude"]), float(fila["latitude"])]
         nombre = fila.get("name", "")
@@ -111,7 +134,7 @@ def crear_geojson(df, timestamp):
             "properties": {
                 "sensor_index": sensor_id,
                 "name": nombre,
-                "pm1_0": pm10,
+                "pm10": pm10,
                 "pm2_5": pm25,
                 "AQ PM 2.5": clasificar_calidad_aire_pm25(pm25),
                 "AQ PM 10": clasificar_calidad_aire_pm10(pm10),
@@ -123,7 +146,7 @@ def crear_geojson(df, timestamp):
         valores_pm10.append(pm10)
         historico.append({
             "sensor_index": sensor_id, "name": nombre, "timestamp": timestamp,
-            "pm1_0": pm10, "pm2_5": pm25,
+            "pm10": pm10, "pm2_5": pm25,
         })
 
     with open(SALIDA_GEOJSON_SENSORES, "w", encoding="utf-8") as archivo:
@@ -137,8 +160,6 @@ def crear_geojson(df, timestamp):
             nuevo = pd.concat([pd.read_csv("historico.csv"), nuevo], ignore_index=True)
         except Exception:
             pass
-    if "sensor_index" in nuevo.columns:
-        nuevo = nuevo[~nuevo["sensor_index"].isin(SENSORES_BLOQUEADOS)]
     nuevo.to_csv("historico.csv", index=False, encoding="utf-8")
 
     return np.array(puntos), np.array(valores_pm25), np.array(valores_pm10)

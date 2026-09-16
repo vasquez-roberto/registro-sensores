@@ -1,10 +1,25 @@
 import csv
+import os
+from pathlib import Path
+
 import requests
 
-API_KEY = "C7B070E7-AAFE-11F1-9E30-4201AC1DC129"
-OUTPUT_CSV = "sensores_detectados.csv"
 
-SENSORES_BLOQUEADOS = {121825}
+def cargar_env(ruta_env):
+    if not ruta_env.exists():
+        return
+    for linea in ruta_env.read_text(encoding="utf-8-sig").splitlines():
+        linea = linea.strip()
+        if not linea or linea.startswith("#") or "=" not in linea:
+            continue
+        clave, valor = linea.split("=", 1)
+        os.environ.setdefault(clave.strip(), valor.strip().strip('"').strip("'"))
+
+
+cargar_env(Path(__file__).resolve().with_name(".env"))
+
+API_KEY = os.getenv("API_KEY_PURPLEAIR")
+OUTPUT_CSV = "sensores_detectados.csv"
 
 params = {
     "fields": "sensor_index,name,latitude,longitude,model,hardware,location_type",
@@ -14,50 +29,34 @@ params = {
     "selng": -100.10,
 }
 
-headers = {"X-API-Key": API_KEY}
-url = "https://api.purpleair.com/v1/sensors"
-
 
 def obtener_sensores():
-    response = requests.get(url, headers=headers, params=params)
+    if not API_KEY:
+        raise RuntimeError("Falta API_KEY_PURPLEAIR en .env")
 
-    if response.status_code != 200:
-        print(
-            f"Error al consultar sensores: "
-            f"{response.status_code} -> {response.text}"
-        )
-        return []
+    respuesta = requests.get(
+        "https://api.purpleair.com/v1/sensors",
+        headers={"X-API-Key": API_KEY},
+        params=params,
+        timeout=30,
+    )
+    respuesta.raise_for_status()
 
-    resultado = response.json()
+    resultado = respuesta.json()
     campos = resultado["fields"]
-    datos = resultado["data"]
-
-    sensores = []
-
-    for fila in datos:
-        sensor = dict(zip(campos, fila))
-
-        if int(sensor["sensor_index"]) in SENSORES_BLOQUEADOS:
-            continue
-
-        sensores.append(sensor)
-
-    return sensores
+    return [dict(zip(campos, fila)) for fila in resultado["data"]]
 
 
 def guardar_csv(sensores):
     if not sensores:
         print("No se encontraron sensores.")
         return
-
     with open(OUTPUT_CSV, "w", newline="", encoding="utf-8") as archivo:
-        writer = csv.DictWriter(archivo, fieldnames=sensores[0].keys())
-        writer.writeheader()
-        writer.writerows(sensores)
-
+        escritor = csv.DictWriter(archivo, fieldnames=sensores[0].keys())
+        escritor.writeheader()
+        escritor.writerows(sensores)
     print(f"{len(sensores)} sensores guardados en {OUTPUT_CSV}")
 
 
 if __name__ == "__main__":
-    sensores = obtener_sensores()
-    guardar_csv(sensores)
+    guardar_csv(obtener_sensores())
