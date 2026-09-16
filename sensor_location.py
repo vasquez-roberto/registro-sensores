@@ -3,9 +3,7 @@ import requests
 
 API_KEY = "C7B070E7-AAFE-11F1-9E30-4201AC1DC129"
 OUTPUT_CSV = "sensores_detectados.csv"
-
-# Agrega aquí los IDs de los sensores que deseas ignorar
-SENSORES_BLOQUEADOS = {121825}  # 121825 es ID del sensor a bloquear
+SENSORES_BLOQUEADOS = {121825}
 
 params = {
     "fields": "sensor_index,name,latitude,longitude,model,hardware,location_type",
@@ -21,9 +19,11 @@ url = "https://api.purpleair.com/v1/sensors"
 
 def obtener_sensores():
     response = requests.get(url, headers=headers, params=params)
+
     if response.status_code != 200:
         print(
-            f"Error al consultar sensores: {response.status_code} -> {response.text}"
+            f"Error al consultar sensores: "
+            f"{response.status_code} -> {response.text}"
         )
         return []
 
@@ -34,11 +34,10 @@ def obtener_sensores():
     sensores = []
     for fila in datos:
         sensor = dict(zip(campos, fila))
-        
-        # Ignora el sensor si su sensor_index está en la lista de bloqueados
-        if sensor.get("sensor_index") in SENSORES_BLOQUEADOS:
+
+        if int(sensor["sensor_index"]) in SENSORES_BLOQUEADOS:
             continue
-            
+
         sensores.append(sensor)
 
     return sensores
