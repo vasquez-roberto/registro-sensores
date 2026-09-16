@@ -292,7 +292,6 @@ def interpolar_lineal(punto, triangulo_indices, puntos, valores):
     except np.linalg.LinAlgError:
         return None
 
-
 def generar_geojson_colonias(
     nombre_archivo,
     colonias_data,
@@ -301,15 +300,21 @@ def generar_geojson_colonias(
     contaminante,
     timestamp,
 ):
+    if len(puntos_data) < 3:
+        print("No hay suficientes sensores para interpolar.")
+        return
+
     try:
         tri = Delaunay(puntos_data)
-        kdtree = KDTree(puntos_data)
-    except Exception as error:
-        print(f"Error al inicializar Delaunay / KDTree: {error}")
-        tri = None
-        kdtree = None
+    except Exception as e:
+        print(f"Error Delaunay: {e}")
+        return
 
-    geo_json_features = []
+    geo_json_data = {
+        "type": "FeatureCollection",
+        "metadata": {"ultima_ejecucion_utc": timestamp},
+        "features": [],
+    }
 
     for colonia in colonias_data:
         geom = colonia["geometry"]
@@ -317,68 +322,53 @@ def generar_geojson_colonias(
         if not geom.is_valid or geom.is_empty:
             continue
 
-        valores_en_colonia = [
-            valores_puntos[i]
-            for i, (lon, lat) in enumerate(puntos_data)
-            if geom.contains(Point(lon, lat))
-        ]
+        # Punto dentro de la colonia: evita centroides fuera de polígonos irregulares.
+        punto = geom.representative_point()
+        p_interpolacion = np.array([punto.x, punto.y])
 
-        if valores_en_colonia:
-            val_interpolado = float(np.mean(valores_en_colonia))
+        # Triángulo formado por sensores que contiene el punto.
+        indice_triangulo = tri.find_simplex(p_interpolacion)
 
-        elif tri is None:
-            val_interpolado = np.nan
-
+        # Fuera de la malla de sensores: no se inventa un valor.
+        if indice_triangulo == -1:
+            valor_interpolado = None
         else:
-            punto_interior = geom.representative_point()
-            punto = np.array([punto_interior.x, punto_interior.y])
+            indices_sensores = tri.simplices[indice_triangulo]
 
-            indice_triangulo = tri.find_simplex(punto)
+            valor_interpolado = interpolar_lineal(
+                p_interpolacion,
+                indices_sensores,
+                puntos_data,
+                valores_puntos,
+            )
 
-            if indice_triangulo != -1:
-                val_interpolado = interpolar_lineal(
-                    punto,
-                    tri.simplices[indice_triangulo],
-                    puntos_data,
-                    valores_puntos,
-                )
-            else:
-                _, indice_cercano = kdtree.query(punto)
-                val_interpolado = valores_puntos[indice_cercano]
+            if valor_interpolado is not None:
+                valor_interpolado = float(valor_interpolado)
 
         valor_exportado = (
-            round(float(val_interpolado), 2)
-            if val_interpolado is not None and not np.isnan(val_interpolado)
+            round(valor_interpolado, 2)
+            if valor_interpolado is not None
             else None
         )
 
-        geo_json_features.append(
-            {
-                "type": "Feature",
-                "geometry": mapping(geom),
-                "properties": {
-                    "nombre": colonia["nombre"],
-                    "valor_interpolado": valor_exportado,
-                    "AQ": (
-                        clasificar_calidad_aire_pm25(valor_exportado)
-                        if contaminante == "pm2_5"
-                        else clasificar_calidad_aire_pm10(valor_exportado)
-                    ),
-                },
-            }
-        )
-
-    geo_json_data = {
-        "type": "FeatureCollection",
-        "metadata": {"ultima_ejecucion_utc": timestamp},
-        "features": geo_json_features,
-    }
+        geo_json_data["features"].append({
+            "type": "Feature",
+            "geometry": mapping(geom),
+            "properties": {
+                "nombre": colonia["nombre"],
+                "valor_interpolado": valor_exportado,
+                "AQ": (
+                    clasificar_calidad_aire_pm25(valor_exportado)
+                    if contaminante == "pm2_5"
+                    else clasificar_calidad_aire_pm10(valor_exportado)
+                ),
+            },
+        })
 
     with open(nombre_archivo, "w", encoding="utf-8") as archivo:
         json.dump(geo_json_data, archivo, ensure_ascii=False, indent=2)
 
     print(f"GeoJSON generado: {nombre_archivo}")
-
 
 if __name__ == "__main__":
     timestamp_ejecucion = datetime.now(timezone.utc).isoformat()
