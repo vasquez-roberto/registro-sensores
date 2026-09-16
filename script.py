@@ -1,17 +1,15 @@
+from datetime import datetime, timezone
 import json
 import os
-from datetime import datetime, timezone
 from pathlib import Path
 
 import geojson
 import numpy as np
 import pandas as pd
 import requests
+from scipy.spatial import Delaunay
 import shapefile
-from scipy.spatial import Delaunay, KDTree
-from shapely.geometry import Point, mapping, shape
-
-print("INICIANDO SCRIPT...")
+from shapely.geometry import Point, shape
 
 
 def cargar_env(ruta_env):
@@ -25,23 +23,31 @@ def cargar_env(ruta_env):
             continue
 
         clave, valor = linea.split("=", 1)
-        os.environ.setdefault(clave.strip(), valor.strip().strip('"').strip("'"))
+        os.environ.setdefault(
+            clave.strip(),
+            valor.strip().strip('"').strip("'"),
+        )
 
 
 cargar_env(Path(__file__).resolve().with_name(".env"))
 
+print("INICIANDO SCRIPT...")
+
 API_KEY = os.getenv("API_KEY_PURPLEAIR")
+
+if not API_KEY:
+    raise RuntimeError(
+        "No se encontró API_KEY_PURPLEAIR en el archivo .env."
+    )
+
 CSV_FILE = "sensores_detectados.csv"
 SALIDA_GEOJSON_SENSORES = "sensores.geojson"
 SALIDA_GEOJSON_COLONIAS_PM25 = "AQ_PM25.geojson"
 SALIDA_GEOJSON_COLONIAS_PM10 = "AQ_PM10.geojson"
 ARCHIVO_SHP_COLONIAS = "shp/2025_1_19_A.shp"
+CAMPOS = "pm1.0,pm2.5"
 
 SENSORES_BLOQUEADOS = {121825}
-
-MIN_VALOR_PM = 0.1
-MAX_VALOR_PM25 = 500.0
-MAX_VALOR_PM10 = 1000.0
 
 
 def leer_csv(ruta):
@@ -49,63 +55,28 @@ def leer_csv(ruta):
     df = df.dropna(subset=["latitude", "longitude", "sensor_index"])
     df["sensor_index"] = df["sensor_index"].astype(int)
 
-    df = df[~df["sensor_index"].isin(SENSORES_BLOQUEADOS)].copy()
+    df = df[~df["sensor_index"].isin(SENSORES_BLOQUEADOS)]
 
     return df
 
 
-def consultar_sensores_masivo(sensor_indices):
-    sensor_indices = [
-        int(sensor_id)
-        for sensor_id in sensor_indices
-        if int(sensor_id) not in SENSORES_BLOQUEADOS
-    ]
+def consultar_sensor(sensor_index):
+    if int(sensor_index) in SENSORES_BLOQUEADOS:
+        return None, None
 
-    if not sensor_indices:
-        return {}
-
-    if not API_KEY:
-        print("Error: falta API_KEY_PURPLEAIR en el archivo .env.")
-        return {}
-
-    ids = ",".join(map(str, sensor_indices))
-    url = (
-        "https://api.purpleair.com/v1/sensors"
-        f"?fields=pm1.0_atm,pm2.5_atm&show_only={ids}"
-    )
-    headers = {"X-API-Key": API_KEY}
-
-    lecturas = {}
+    url = f"https://api.purpleair.com/v1/sensors/{sensor_index}?fields={CAMPOS}"
+    headers = {"X-API-Key": API_KEY} if API_KEY else {}
 
     try:
-        response = requests.get(url, headers=headers, timeout=15)
+        response = requests.get(url, headers=headers, timeout=10)
+    except Exception:
+        return None, None
 
-        if response.status_code != 200:
-            print(
-                f"Error en PurpleAir: "
-                f"{response.status_code} -> {response.text}"
-            )
-            return lecturas
+    if response.status_code == 200:
+        data = response.json().get("sensor", {})
+        return data.get("pm1.0"), data.get("pm2.5")
 
-        data = response.json()
-        campos = data.get("fields", [])
-
-        idx_id = campos.index("sensor_index")
-        idx_pm1 = campos.index("pm1.0_atm")
-        idx_pm25 = campos.index("pm2.5_atm")
-
-        for sensor in data.get("data", []):
-            sensor_id = int(sensor[idx_id])
-
-            if sensor_id in SENSORES_BLOQUEADOS:
-                continue
-
-            lecturas[sensor_id] = (sensor[idx_pm1], sensor[idx_pm25])
-
-    except Exception as error:
-        print(f"Error consultando API de PurpleAir: {error}")
-
-    return lecturas
+    return None, None
 
 
 def clasificar_calidad_aire_pm25(pm25):
@@ -114,7 +85,7 @@ def clasificar_calidad_aire_pm25(pm25):
 
     try:
         pm25 = float(pm25)
-    except (ValueError, TypeError):
+    except Exception:
         return "Sin datos"
 
     if pm25 <= 15:
@@ -135,7 +106,7 @@ def clasificar_calidad_aire_pm10(pm10):
 
     try:
         pm10 = float(pm10)
-    except (ValueError, TypeError):
+    except Exception:
         return "Sin datos"
 
     if pm10 <= 45:
@@ -151,14 +122,8 @@ def clasificar_calidad_aire_pm10(pm10):
 
 
 def crear_geojson(df, timestamp):
-    features = []
-    puntos = []
-    valores_pm25 = []
-    valores_pm10 = []
+    features, puntos, valores_pm25, valores_pm10 = [], [], [], []
     datos_historicos = []
-
-    indices = df["sensor_index"].tolist()
-    lecturas = consultar_sensores_masivo(indices)
 
     for _, fila in df.iterrows():
         sensor_id = int(fila["sensor_index"])
@@ -166,59 +131,42 @@ def crear_geojson(df, timestamp):
         if sensor_id in SENSORES_BLOQUEADOS:
             continue
 
-        pm10, pm25 = lecturas.get(sensor_id, (None, None))
+        print(f"Consultando sensor {sensor_id}...")
+        pm10, pm25 = consultar_sensor(sensor_id)
 
-        if pm10 is None or pm25 is None:
-            continue
-
-        try:
-            pm10 = float(pm10)
-            pm25 = float(pm25)
-        except (ValueError, TypeError):
-            continue
-
-        es_pm25_valido = MIN_VALOR_PM <= pm25 <= MAX_VALOR_PM25
-        es_pm10_valido = MIN_VALOR_PM <= pm10 <= MAX_VALOR_PM10
-
-        if not (es_pm25_valido and es_pm10_valido):
-            print(
-                f"Sensor {sensor_id} ignorado por datos atípicos: "
-                f"PM2.5={pm25}, PM10={pm10}"
-            )
-            continue
-
-        props = {
-            "sensor_index": sensor_id,
-            "name": fila.get("name", ""),
-            "pm1_0": pm10,
-            "pm2_5": pm25,
-            "AQ PM 2.5": clasificar_calidad_aire_pm25(pm25),
-            "AQ PM 10": clasificar_calidad_aire_pm10(pm10),
-            "timestamp": timestamp,
-        }
-
-        coords = (float(fila["longitude"]), float(fila["latitude"]))
-
-        features.append(
-            geojson.Feature(
-                geometry=geojson.Point(coords),
-                properties=props,
-            )
-        )
-
-        puntos.append(coords)
-        valores_pm25.append(pm25)
-        valores_pm10.append(pm10)
-
-        datos_historicos.append(
-            {
+        if pm10 is not None and pm25 is not None:
+            props = {
                 "sensor_index": sensor_id,
                 "name": fila.get("name", ""),
-                "timestamp": timestamp,
                 "pm1_0": pm10,
                 "pm2_5": pm25,
+                "AQ PM 2.5": clasificar_calidad_aire_pm25(pm25),
+                "AQ PM 10": clasificar_calidad_aire_pm10(pm10),
+                "timestamp": timestamp,
             }
-        )
+
+            coords = (float(fila["longitude"]), float(fila["latitude"]))
+
+            features.append(
+                geojson.Feature(
+                    geometry=geojson.Point(coords),
+                    properties=props,
+                )
+            )
+
+            puntos.append(coords)
+            valores_pm25.append(float(pm25))
+            valores_pm10.append(float(pm10))
+
+            datos_historicos.append(
+                {
+                    "sensor_index": sensor_id,
+                    "name": fila.get("name", ""),
+                    "timestamp": timestamp,
+                    "pm1_0": pm10,
+                    "pm2_5": pm25,
+                }
+            )
 
     with open(SALIDA_GEOJSON_SENSORES, "w", encoding="utf-8") as archivo:
         geojson.dump(geojson.FeatureCollection(features), archivo, indent=2)
@@ -237,10 +185,6 @@ def crear_geojson(df, timestamp):
         df_total = df_nuevo
 
     if "sensor_index" in df_total.columns:
-        df_total["sensor_index"] = pd.to_numeric(
-            df_total["sensor_index"],
-            errors="coerce",
-        )
         df_total = df_total[
             ~df_total["sensor_index"].isin(SENSORES_BLOQUEADOS)
         ]
@@ -281,16 +225,17 @@ def interpolar_lineal(punto, triangulo_indices, puntos, valores):
     delta_p = punto - v0
 
     try:
-        matriz = np.array([delta1, delta2]).T
-        pesos = np.linalg.solve(matriz, delta_p)
+        A = np.array([delta1, delta2]).T
+        w = np.linalg.solve(A, delta_p)
 
         return (
-            (1 - pesos[0] - pesos[1]) * z0
-            + pesos[0] * z1
-            + pesos[1] * z2
+            (1 - w[0] - w[1]) * z0
+            + w[0] * z1
+            + w[1] * z2
         )
     except np.linalg.LinAlgError:
         return None
+
 
 def generar_geojson_colonias(
     nombre_archivo,
@@ -300,15 +245,42 @@ def generar_geojson_colonias(
     contaminante,
     timestamp,
 ):
-    if len(puntos_data) < 3:
-        print("No hay suficientes sensores para interpolar.")
-        return
-
     try:
         tri = Delaunay(puntos_data)
-    except Exception as e:
-        print(f"Error Delaunay: {e}")
-        return
+    except Exception as error:
+        print(f"Error Delaunay: {error}")
+        tri = None
+
+    for colonia in colonias_data:
+        geom = colonia["geometry"]
+
+        valores_en_colonia = [
+            valores_puntos[i]
+            for i, (lon, lat) in enumerate(puntos_data)
+            if geom.contains(Point(lon, lat))
+        ]
+
+        if valores_en_colonia:
+            colonia["valor_interpolado"] = float(np.mean(valores_en_colonia))
+        else:
+            if tri is None:
+                colonia["valor_interpolado"] = np.nan
+                continue
+
+            centroide = geom.centroid
+            p_cent = np.array([centroide.x, centroide.y])
+            idx = tri.find_simplex(p_cent)
+
+            colonia["valor_interpolado"] = (
+                interpolar_lineal(
+                    p_cent,
+                    tri.simplices[idx],
+                    puntos_data,
+                    valores_puntos,
+                )
+                if idx != -1
+                else np.nan
+            )
 
     geo_json_data = {
         "type": "FeatureCollection",
@@ -322,53 +294,57 @@ def generar_geojson_colonias(
         if not geom.is_valid or geom.is_empty:
             continue
 
-        # Punto dentro de la colonia: evita centroides fuera de polígonos irregulares.
-        punto = geom.representative_point()
-        p_interpolacion = np.array([punto.x, punto.y])
+        try:
+            if geom.geom_type == "Polygon":
+                geometry = {
+                    "type": "Polygon",
+                    "coordinates": [list(geom.exterior.coords)],
+                }
 
-        # Triángulo formado por sensores que contiene el punto.
-        indice_triangulo = tri.find_simplex(p_interpolacion)
+            elif geom.geom_type == "MultiPolygon":
+                geometry = {
+                    "type": "MultiPolygon",
+                    "coordinates": [
+                        [list(poligono.exterior.coords)]
+                        for poligono in geom.geoms
+                    ],
+                }
 
-        # Fuera de la malla de sensores: no se inventa un valor.
-        if indice_triangulo == -1:
-            valor_interpolado = None
-        else:
-            indices_sensores = tri.simplices[indice_triangulo]
+            else:
+                continue
 
-            valor_interpolado = interpolar_lineal(
-                p_interpolacion,
-                indices_sensores,
-                puntos_data,
-                valores_puntos,
-            )
+        except Exception:
+            continue
 
-            if valor_interpolado is not None:
-                valor_interpolado = float(valor_interpolado)
+        valor = colonia.get("valor_interpolado")
 
         valor_exportado = (
-            round(valor_interpolado, 2)
-            if valor_interpolado is not None
+            round(float(valor), 2)
+            if valor is not None and not np.isnan(valor)
             else None
         )
 
-        geo_json_data["features"].append({
-            "type": "Feature",
-            "geometry": mapping(geom),
-            "properties": {
-                "nombre": colonia["nombre"],
-                "valor_interpolado": valor_exportado,
-                "AQ": (
-                    clasificar_calidad_aire_pm25(valor_exportado)
-                    if contaminante == "pm2_5"
-                    else clasificar_calidad_aire_pm10(valor_exportado)
-                ),
-            },
-        })
+        geo_json_data["features"].append(
+            {
+                "type": "Feature",
+                "geometry": geometry,
+                "properties": {
+                    "nombre": colonia["nombre"],
+                    "valor_interpolado": valor_exportado,
+                    "AQ": (
+                        clasificar_calidad_aire_pm25(valor_exportado)
+                        if contaminante == "pm2_5"
+                        else clasificar_calidad_aire_pm10(valor_exportado)
+                    ),
+                },
+            }
+        )
 
     with open(nombre_archivo, "w", encoding="utf-8") as archivo:
         json.dump(geo_json_data, archivo, ensure_ascii=False, indent=2)
 
     print(f"GeoJSON generado: {nombre_archivo}")
+
 
 if __name__ == "__main__":
     timestamp_ejecucion = datetime.now(timezone.utc).isoformat()
@@ -381,11 +357,12 @@ if __name__ == "__main__":
     )
 
     if puntos_data.size > 0 and os.path.exists(ARCHIVO_SHP_COLONIAS):
-        colonias_base = cargar_datos_colonias_shp(ARCHIVO_SHP_COLONIAS)
+        colonias_pm25 = cargar_datos_colonias_shp(ARCHIVO_SHP_COLONIAS)
+        colonias_pm10 = cargar_datos_colonias_shp(ARCHIVO_SHP_COLONIAS)
 
         generar_geojson_colonias(
             SALIDA_GEOJSON_COLONIAS_PM25,
-            colonias_base,
+            colonias_pm25,
             puntos_data,
             valores_pm25,
             "pm2_5",
@@ -394,7 +371,7 @@ if __name__ == "__main__":
 
         generar_geojson_colonias(
             SALIDA_GEOJSON_COLONIAS_PM10,
-            colonias_base,
+            colonias_pm10,
             puntos_data,
             valores_pm10,
             "pm10",
