@@ -2,8 +2,7 @@
 
 ## Problema identificado
 
-Una lectura anómala podía alterar la interpolación. Además, el shapefile de AGEBs usa el sistema de coordenadas
-`MEXICO_ITRF_2008_LCC` (Lambert Conformal Conic, metros), mientras que los
+Una lectura anómala podía alterar la interpolación. Además, el shapefile de AGEBs usa el sistema de coordenadas `MEXICO_ITRF_2008_LCC` (Lambert Conformal Conic, metros), mientras que los
 sensores PurpleAir usan longitud/latitud. Un GeoJSON exportado directamente
 desde ese SHP tenía coordenadas como `2659616, 1545244`; un GeoJSON para
 ArcGIS debe emplear coordenadas geográficas, por ejemplo `-100.25, 25.70`.
@@ -24,7 +23,7 @@ También se agrega un filtro de lecturas:
 
 | Contaminante | Rango aceptado (µg/m³) |
 | PM2.5 | 0 a 500.4 |
-| PM10 | 0 a 604 |
+| PM1.0 | 0 a 604 |
 
 Estos son límites de cribado, no pruebas de que una lectura superior sea
 imposible: durante humo extremo puede haber concentraciones muy altas. Los

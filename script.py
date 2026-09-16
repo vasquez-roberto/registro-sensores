@@ -31,7 +31,7 @@ SALIDA_GEOJSON_SENSORES = "sensores.geojson"
 SALIDA_GEOJSON_COLONIAS_PM25 = "AQ_PM25.geojson"
 SALIDA_GEOJSON_COLONIAS_PM10 = "AQ_PM10.geojson"
 ARCHIVO_SHP_COLONIAS = "shp/2025_1_19_A.shp"
-CAMPOS = "pm10.0,pm2.5"
+CAMPOS = "pm1.0,pm2.5"
 
 # Límites de cribado basados en el extremo superior de las tablas AQI de EPA.
 # No son límites físicos: un evento extraordinario debe revisarse manualmente.
@@ -56,7 +56,7 @@ def consultar_sensor(sensor_index):
         respuesta = requests.get(url, headers={"X-API-Key": API_KEY}, timeout=15)
         respuesta.raise_for_status()
         sensor = respuesta.json().get("sensor", {})
-        return sensor.get("pm10.0"), sensor.get("pm2.5")
+        return sensor.get("pm1.0"), sensor.get("pm2.5")
     except requests.RequestException as error:
         print(f"No se pudo consultar {sensor_index}: {error}")
         return None, None
@@ -134,7 +134,7 @@ def crear_geojson(df, timestamp):
             "properties": {
                 "sensor_index": sensor_id,
                 "name": nombre,
-                "pm10": pm10,
+                "pm1_0": pm10,
                 "pm2_5": pm25,
                 "AQ PM 2.5": clasificar_calidad_aire_pm25(pm25),
                 "AQ PM 10": clasificar_calidad_aire_pm10(pm10),
@@ -146,7 +146,7 @@ def crear_geojson(df, timestamp):
         valores_pm10.append(pm10)
         historico.append({
             "sensor_index": sensor_id, "name": nombre, "timestamp": timestamp,
-            "pm10": pm10, "pm2_5": pm25,
+            "pm1_0": pm10, "pm2_5": pm25,
         })
 
     with open(SALIDA_GEOJSON_SENSORES, "w", encoding="utf-8") as archivo:
