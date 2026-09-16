@@ -1,0 +1,8 @@
+geojson
+numpy
+pandas
+requests
+scipy
+pyshp
+shapely
+geopandas

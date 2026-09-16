@@ -1,0 +1,46 @@
+name: Actualizar GeoJSON
+
+on:
+  schedule:
+    - cron: '*/20 * * * *'  # Se ejecuta automáticamente cada 20 minutos
+  workflow_dispatch:        # Permite ejecutarlo manualmente desde la pestaña Actions
+
+permissions:
+  contents: write           # Permisos necesarios para escribir en el repositorio
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Clonar repositorio
+        uses: actions/checkout@v3
+        with:
+          persist-credentials: false # Evita conflictos de permisos con la cuenta del bot
+          fetch-depth: 0
+
+      - name: Configurar Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Ejecutar script de lectura
+        env:
+          API_KEY_PURPLEAIR: ${{ secrets.API_KEY_PURPLEAIR }}
+        run: |
+          python script.py
+
+      - name: Guardar y subir cambios
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add .
+          git commit -m "Auto-actualización de archivos GeoJSON" || exit 0
+          git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git" HEAD:main --force
